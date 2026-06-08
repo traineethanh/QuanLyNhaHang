@@ -1,3 +1,4 @@
+// app/api/billing/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
@@ -82,6 +83,23 @@ export async function POST(request: Request) {
           tableUpdateError.message,
         );
       }
+
+      // =========================================================================
+      // 🔥 TỰ ĐỘNG ĐÓNG VÒNG ĐỜI LỊCH ĐẶT BÀN KHI KHÁCH THANH TOÁN RA VỀ
+      // =========================================================================
+      // Tìm và cập nhật toàn bộ lịch đặt trước của bàn này đang có trạng thái 'seated' sang 'completed'
+      const { error: reservationUpdateError } = await supabase
+        .from("reservations")
+        .update({ status: "completed" })
+        .eq("table_id", table_id)
+        .eq("status", "seated"); // Chỉ xử lý những khách đang ngồi ăn thực tế tại bàn này
+
+      if (reservationUpdateError) {
+        console.error(
+          "Lỗi tự động đóng lịch đặt bàn sang completed:",
+          reservationUpdateError.message,
+        );
+      }
     }
 
     // Trả kết quả thành công rực rỡ về cho giao diện Thu ngân
@@ -89,7 +107,7 @@ export async function POST(request: Request) {
       {
         success: true,
         message:
-          "Hóa đơn đã được chốt thành công. Bàn ăn đã chuyển sang trạng thái chờ dọn dẹp!",
+          "Hóa đơn đã được chốt thành công. Lịch đặt bàn đã đóng hoàn tất & Bàn ăn đã chuyển sang trạng thái chờ dọn dẹp!",
       },
       { status: 200 },
     );

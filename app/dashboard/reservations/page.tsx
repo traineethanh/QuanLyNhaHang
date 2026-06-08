@@ -10,13 +10,17 @@ export const dynamic = "force-dynamic";
 async function getReservationsData() {
   const supabase = await createClient();
 
-  // Fetch song song danh sách đặt bàn và danh sách bàn trống phục vụ nghiệp vụ xếp bàn
+  // Fetch song song danh sách đặt bàn và danh sách bàn (Đã sửa để JOIN lấy thêm thông tin Area/Tầng)
   const [reservationsRes, tablesRes] = await Promise.all([
     supabase
       .from("reservations")
-      .select("*, table:tables(*)")
+      .select("*, table:tables(*, area:areas(*))") // Lấy thông tin khu vực của bàn trong lịch hẹn
       .order("reservation_time", { ascending: true }),
-    supabase.from("tables").select("*, area:areas(*)").eq("is_active", true),
+
+    supabase
+      .from("tables")
+      .select("*, area:areas(*)") // 🔥 SỬA CHỖ NÀY: Lấy kèm thông tin tầng/khu vực của tất cả các bàn
+      .eq("is_active", true),
   ]);
 
   return {

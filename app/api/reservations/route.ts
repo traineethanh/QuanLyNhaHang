@@ -1,13 +1,12 @@
+// app/api/reservations/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
   try {
-    // 1. Quy tắc Bảo mật RLS: Khởi tạo Supabase Server Client bắt buộc có await
     const supabase = await createClient();
-
-    // Đọc dữ liệu gửi lên từ Form Client Component
     const body = await request.json();
+
     const {
       customer_name,
       customer_phone,
@@ -17,7 +16,6 @@ export async function POST(request: Request) {
       note,
     } = body;
 
-    // 2. Thanh lọc dữ liệu rác đầu vào an toàn
     if (!customer_name || !customer_phone || !reservation_time) {
       return NextResponse.json(
         { error: "Vui lòng điền đầy đủ các thông tin bắt buộc (*)" },
@@ -25,13 +23,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Chuẩn bị dữ liệu sạch để insert vào Database
     const targetTableId = table_id === "none" || !table_id ? null : table_id;
 
-    // Nếu có gán bàn trước, lịch hẹn sẽ mặc định trạng thái 'confirmed', ngược lại là 'pending'
+    // Quy tắc nghiệp vụ chuẩn: Có gán bàn cụ thể thì khóa bàn luôn (confirmed), ngược lại là chờ xếp bàn (pending)
     const initialStatus = targetTableId ? "confirmed" : "pending";
 
-    // Thực hiện chèn bản ghi mới vào bảng `reservations`
     const { data: newReservation, error: insertError } = await supabase
       .from("reservations")
       .insert({
@@ -53,8 +49,8 @@ export async function POST(request: Request) {
       );
     }
 
-    // ĐỒNG BỘ NGHIỆP VỤ: Nếu gán bàn ngay từ đầu, tự động chuyển trạng thái bàn ăn sang 'reserved' (Đã đặt trước)
-    if (targetTableId) {
+    // Nếu gán bàn ngay, cập nhật trạng thái bàn vật lý sang 'reserved' để chặn trùng lịch
+    if (initialStatus === "confirmed" && targetTableId) {
       await supabase
         .from("tables")
         .update({ status: "reserved" })
@@ -70,9 +66,8 @@ export async function POST(request: Request) {
       { status: 201 },
     );
   } catch (catchError: any) {
-    console.error("Lỗi API nhận đặt bàn:", catchError);
     return NextResponse.json(
-      { error: catchError.message || "Lỗi hệ thống nội bộ" },
+      { error: catchError.message || "Lỗi xử lý server" },
       { status: 500 },
     );
   }
