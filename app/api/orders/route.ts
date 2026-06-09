@@ -1,24 +1,21 @@
+// app/api/orders/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { MenuItem } from "@/lib/types/database";
 
 export async function POST(request: Request) {
   try {
-    // 1. Quy tắc Bảo mật RLS: Khởi tạo Supabase Server Client bắt buộc có await
     const supabase = await createClient();
 
-    // Lấy thông tin tài khoản nhân viên phục vụ đăng nhập hệ thống (nếu có)
     const {
       data: { user },
     } = await supabase.auth.getUser();
     const waiterId = user ? user.id : null;
 
-    // Đọc dữ liệu giỏ hàng POS gửi lên
     const body = await request.json();
     const { table_id, guest_count, items, note, action_type, is_customer } =
       body;
 
-    // 2. Thanh lọc dữ liệu rác đầu vào an toàn
     if (
       !table_id ||
       table_id === "none" ||
@@ -27,12 +24,11 @@ export async function POST(request: Request) {
       items.length === 0
     ) {
       return NextResponse.json(
-        { error: "Dữ liệu giỏ hàng trống hoặc không hợp lệ" },
+        { error: "Dữ liệu giỏ hàng trống" },
         { status: 400 },
       );
     }
 
-    // Lấy danh sách ID món ăn có trong giỏ để truy vấn đơn giá thực tế trong Database
     const menuItemIds = items.map((i: any) => i.menu_item_id);
     const { data: dbMenuItems, error: menuError } = await supabase
       .from("menu_items")
@@ -41,31 +37,22 @@ export async function POST(request: Request) {
 
     if (menuError || !dbMenuItems) {
       return NextResponse.json(
-        { error: "Không thể xác thực danh sách món ăn từ hệ thống" },
+        { error: "Không thể xác thực món ăn" },
         { status: 400 },
       );
     }
 
-    // Khởi tạo biến tính tổng tiền tạm tính độc lập tại Backend cho lượt gọi này
     let calculatedSubtotal = 0;
-
-    // Chuẩn bị mảng dữ liệu sạch cho bảng order_items sau khi đã xác thực đơn giá
     const sanitizedOrderItems = items.map((item: any) => {
       const matchedDbItem = (dbMenuItems as MenuItem[]).find(
         (dbItem) => dbItem.id === item.menu_item_id,
       );
-
-      if (!matchedDbItem) {
-        throw new Error(
-          `Món ăn có ID ${item.menu_item_id} không tồn tại trên hệ thống`,
-        );
-      }
+      if (!matchedDbItem)
+        throw new Error(`Món ăn ID ${item.menu_item_id} không tồn tại`);
 
       const quantity = Math.max(1, parseInt(item.quantity) || 1);
       const unitPrice = matchedDbItem.price;
       const itemTotalPrice = unitPrice * quantity;
-
-      // Cộng dồn tổng tiền tạm tính của riêng lượt gọi món này
       calculatedSubtotal += itemTotalPrice;
 
       return {
@@ -74,26 +61,73 @@ export async function POST(request: Request) {
         unit_price: unitPrice,
         total_price: itemTotalPrice,
         note: item.note && item.note.trim() !== "" ? item.note.trim() : null,
-        status: "pending", // Mặc định món ăn mới gửi xuống sẽ chờ bếp duyệt nấu
+        status: "pending",
       };
     });
 
-    // Tính toán Thuế VAT 10% và Tổng tiền cuối cùng khớp với cấu trúc schema numeric(12,2)
+    // =========================================================================
+    // 🛡️ CHẶN BẢO VỆ BACKEND: KIỂM TRA ĐỊNH LƯỢNG KHO TRƯỚC KHI CHO TẠO ĐƠN
+    // =========================================================================
+    const { data: activeRecipes } = await supabase
+      .from("recipes")
+      .select("menu_item_id, ingredient_id, quantity_required")
+      .in("menu_item_id", menuItemIds);
+
+    const ingredientMapToSubtract = new Map<string, number>();
+    if (activeRecipes && activeRecipes.length > 0) {
+      sanitizedOrderItems.forEach((orderItem) => {
+        const itemRecipes = activeRecipes.filter(
+          (r) => r.menu_item_id === orderItem.menu_item_id,
+        );
+        itemRecipes.forEach((recipe) => {
+          const totalRequired =
+            orderItem.quantity * Number(recipe.quantity_required);
+          const currentAccumulated =
+            ingredientMapToSubtract.get(recipe.ingredient_id) || 0;
+          ingredientMapToSubtract.set(
+            recipe.ingredient_id,
+            currentAccumulated + totalRequired,
+          );
+        });
+      });
+    }
+
+    // Kiểm tra xem lượng tồn kho tổng có đủ đáp ứng nhu cầu gọi món hay không
+    for (const [
+      ingredientId,
+      totalNeededAmount,
+    ] of ingredientMapToSubtract.entries()) {
+      const { data: stockCheck } = await supabase
+        .from("inventory_stock")
+        .select("total_inventory")
+        .eq("ingredient_id", ingredientId)
+        .maybeSingle();
+
+      const currentAvailable = Number(stockCheck?.total_inventory) || 0;
+      if (currentAvailable < totalNeededAmount) {
+        return NextResponse.json(
+          {
+            error: `Không thể đặt đơn! Kho không đủ nguyên liệu chế biến (Thiếu lượng yêu cầu của ID: ${ingredientId})`,
+          },
+          { status: 400 },
+        );
+      }
+    }
+
+    // =========================================================================
+    // 📝 KHỞI TẠO ĐƠN HÀNG KHI ĐÃ ĐỦ ĐIỀU KIỆN KHO
+    // =========================================================================
     const calculatedTax = calculatedSubtotal * 0.1;
     const calculatedTotal = calculatedSubtotal + calculatedTax;
-
-    // Định nghĩa trạng thái đơn dựa trên đối tượng đặt món: Khách đặt -> pending, Nhân viên -> confirmed
     const defaultStatus = is_customer ? "pending" : "confirmed";
     const finalStatus =
       action_type === "immediate_pay" ? "paid" : defaultStatus;
 
-    // 🌟 THỰC THI Ý TƯỞNG: Luôn tạo một bản ghi hóa đơn mới hoàn toàn cho mỗi lần gọi món
-    // để giao diện nhà bếp (KDS) hiển thị tách biệt theo từng block, không gộp chung gây sót đồ
     const { data: newOrder, error: orderError } = await supabase
       .from("orders")
       .insert({
         table_id: table_id,
-        waiter_id: waiterId, // ID nhân viên hoặc null nếu khách tự quét mã QR đặt món
+        waiter_id: waiterId,
         status: finalStatus,
         subtotal: calculatedSubtotal,
         discount: 0,
@@ -108,50 +142,111 @@ export async function POST(request: Request) {
 
     if (orderError || !newOrder) {
       return NextResponse.json(
-        { error: `Lỗi khởi tạo đơn hàng mới: ${orderError.message}` },
+        { error: `Lỗi tạo đơn: ${orderError.message}` },
         { status: 400 },
       );
     }
 
-    // Bổ sung khóa ngoại `order_id` vừa sinh ra cho danh sách chi tiết món ăn con
     const finalOrderItems = sanitizedOrderItems.map((item) => ({
       ...item,
       order_id: newOrder.id,
     }));
-
-    // Thêm danh sách món ăn hàng loạt vào bảng chi tiết `order_items` (Bulk Insert)
     const { error: itemsInsertError } = await supabase
       .from("order_items")
       .insert(finalOrderItems);
 
     if (itemsInsertError) {
       return NextResponse.json(
-        {
-          error: `Lỗi lưu danh sách món ăn chi tiết: ${itemsInsertError.message}`,
-        },
+        { error: `Lỗi lưu chi tiết đơn hàng: ${itemsInsertError.message}` },
         { status: 400 },
       );
     }
 
-    // Tự động chuyển trạng thái phòng bàn sang 'occupied' (Có khách) để đồng bộ sơ đồ bàn
     await supabase
       .from("tables")
       .update({ status: "occupied" })
       .eq("id", table_id);
 
-    // Trả kết quả thành công mỹ mãn về cho phía Client giao diện
+    // =========================================================================
+    // 📦 THỰC THI THUẬT TOÁN FIFO: KHẤU TRỪ TRONG LÔ HÀNG (BATCH) & ĐỒNG BỘ KHO TỔNG
+    // =========================================================================
+    try {
+      for (const [
+        ingredientId,
+        totalNeededAmount,
+      ] of ingredientMapToSubtract.entries()) {
+        let remainingAmountToSubtract = totalNeededAmount;
+
+        // 1. Tìm các lô hàng có số lượng > 0, xếp theo ngày nhập kho cũ nhất lên trước (FIFO)
+        const { data: activeBatches } = await supabase
+          .from("inventory_batches")
+          .select("id, current_quantity, batch_code")
+          .eq("ingredient_id", ingredientId)
+          .gt("current_quantity", 0)
+          .order("received_at", { ascending: true });
+
+        if (activeBatches && activeBatches.length > 0) {
+          for (const batch of activeBatches) {
+            if (remainingAmountToSubtract <= 0) break;
+
+            const currentBatchQty = Number(batch.current_quantity) || 0;
+
+            if (currentBatchQty >= remainingAmountToSubtract) {
+              // Lô hiện tại đủ dùng -> Trừ một phần lô, kết thúc luồng
+              const newBatchQty = currentBatchQty - remainingAmountToSubtract;
+              await supabase
+                .from("inventory_batches")
+                .update({ current_quantity: newBatchQty })
+                .eq("id", batch.id);
+
+              remainingAmountToSubtract = 0;
+            } else {
+              // Lô hiện tại không đủ -> Trừ sạch lô về 0, chuyển sang trừ tiếp lô sau
+              remainingAmountToSubtract -= currentBatchQty;
+              await supabase
+                .from("inventory_batches")
+                .update({ current_quantity: 0 })
+                .eq("id", batch.id);
+            }
+          }
+        }
+
+        // 2. Đồng bộ cập nhật lại tổng tồn kho trong bảng `inventory_stock`
+        const { data: stockData } = await supabase
+          .from("inventory_stock")
+          .select("id, total_inventory")
+          .eq("ingredient_id", ingredientId)
+          .maybeSingle();
+
+        if (stockData) {
+          const currentStock = Number(stockData.total_inventory) || 0;
+          // Hạ kho an toàn, đảm bảo không bao giờ bị số âm nhờ bước chặn ở trên
+          const newStockAmount = Math.max(0, currentStock - totalNeededAmount);
+
+          await supabase
+            .from("inventory_stock")
+            .update({
+              total_inventory: newStockAmount,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", stockData.id);
+        }
+      }
+    } catch (inventoryError) {
+      console.error("Lỗi chạy ngầm trừ kho định lượng FIFO:", inventoryError);
+    }
+
     return NextResponse.json(
       {
         success: true,
         message:
-          "Đơn đặt món mới đã được khởi tạo độc lập thành công trên hệ thống",
+          "Đơn đặt món mới đã được khởi tạo thành công và đã khấu trừ kho theo lô!",
         orderId: newOrder.id,
         orderNumber: newOrder.order_number,
       },
       { status: 201 },
     );
   } catch (catchError: any) {
-    console.error("Lỗi hệ thống xử lý đặt món:", catchError);
     return NextResponse.json(
       { error: catchError.message || "Lỗi hệ thống nội bộ" },
       { status: 500 },

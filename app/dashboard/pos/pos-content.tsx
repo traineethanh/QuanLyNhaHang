@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Table, Area, MenuItem, MenuCategory } from "@/lib/types/database";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,6 +57,10 @@ export function POSContent({ tables, categories, menuItems }: POSContentProps) {
   const qrTableId = searchParams.get("tableId");
   const isCustomer = searchParams.get("role") === "customer";
 
+  const [inventoryMap, setInventoryMap] = useState<
+    Record<string, { stock_status: string; max_quantity: number }>
+  >({});
+
   const [selectedTable, setSelectedTable] = useState<string>("none"); // Tránh chuỗi rỗng để Select Component chạy mượt hơn
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -85,27 +89,49 @@ export function POSContent({ tables, categories, menuItems }: POSContentProps) {
   }, [menuItems, searchQuery, selectedCategory]);
 
   const addToCart = (menuItem: MenuItem) => {
-    setCart((prev) => {
-      const existing = prev.find((item) => item.menuItem.id === menuItem.id);
-      if (existing) {
-        return prev.map((item) =>
+    const stockInfo = inventoryMap[menuItem.id];
+    const maxQty = stockInfo ? stockInfo.max_quantity : 999;
+
+    const existingItem = cart.find((item) => item.menuItem.id === menuItem.id);
+    const currentQtyInCart = existingItem ? existingItem.quantity : 0;
+
+    if (currentQtyInCart >= maxQty) {
+      alert(
+        `Không thể thêm! Nguyên liệu trong kho chỉ đủ làm tối đa ${maxQty} suất món này.`,
+      );
+      return;
+    }
+
+    if (existingItem) {
+      setCart(
+        cart.map((item) =>
           item.menuItem.id === menuItem.id
             ? { ...item, quantity: item.quantity + 1 }
             : item,
-        );
-      }
-      return [...prev, { menuItem, quantity: 1, note: "" }];
-    });
+        ),
+      );
+    } else {
+      setCart([...cart, { menuItem, quantity: 1, note: "" }]);
+    }
   };
 
-  const updateQuantity = (menuItemId: string, delta: number) => {
-    setCart((prev) =>
-      prev
-        .map((item) =>
-          item.menuItem.id === menuItemId
-            ? { ...item, quantity: Math.max(0, item.quantity + delta) }
-            : item,
-        )
+  const updateQuantity = (menuItemId: string, amount: number) => {
+    const stockInfo = inventoryMap[menuItemId];
+    const maxQty = stockInfo ? stockInfo.max_quantity : 999;
+
+    setCart(
+      cart
+        .map((item) => {
+          if (item.menuItem.id === menuItemId) {
+            const newQty = item.quantity + amount;
+            if (newQty > maxQty) {
+              alert(`Kho nguyên liệu đã đạt giới hạn tối đa (${maxQty} suất)`);
+              return item;
+            }
+            return { ...item, quantity: newQty };
+          }
+          return item;
+        })
         .filter((item) => item.quantity > 0),
     );
   };
@@ -195,6 +221,21 @@ export function POSContent({ tables, categories, menuItems }: POSContentProps) {
     }
   };
 
+  useEffect(() => {
+    async function fetchInventory() {
+      try {
+        const res = await fetch("/api/inventory/check-availability");
+        const data = await res.json();
+        if (data.success) {
+          setInventoryMap(data.availability);
+        }
+      } catch (err) {
+        console.error("Lỗi kiểm tra kho:", err);
+      }
+    }
+    fetchInventory();
+  }, []);
+
   return (
     <div className="flex h-[calc(100vh-4rem)]">
       {/* Menu Section */}
@@ -240,37 +281,71 @@ export function POSContent({ tables, categories, menuItems }: POSContentProps) {
         {/* Menu Items Grid */}
         <ScrollArea className="flex-1 h-0">
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 pb-4">
-            {filteredItems.map((item) => (
-              <Card
-                key={item.id}
-                className="cursor-pointer hover:border-primary transition-colors overflow-hidden"
-                onClick={() => addToCart(item)}
-              >
-                <div className="aspect-square bg-muted relative overflow-hidden">
-                  {item.image_url ? (
-                    <img
-                      src={item.image_url}
-                      alt={item.name}
-                      className="absolute inset-0 object-cover w-full h-full"
-                      onClick={(e) => { e.stopPropagation(); setPreviewImage(item.image_url!); }}
-                    />
-                  ) : (
-                    <div className="flex items-center justify-center h-full text-4xl">
-                      🍽️
+            {filteredItems.map((item) => {
+              const stockInfo = inventoryMap[item.id];
+              const isOutOfStock = stockInfo && stockInfo.max_quantity === 0;
+
+              return (
+                <Card
+                  key={item.id}
+                  className={cn(
+                    "cursor-pointer hover:border-primary transition-colors overflow-hidden flex flex-col group relative",
+                    isOutOfStock &&
+                      "opacity-50 pointer-events-none select-none border-dashed",
+                  )}
+                  onClick={() => !isOutOfStock && addToCart(item)}
+                >
+                  {isOutOfStock && (
+                    <div className="absolute inset-0 bg-black/40 z-10 flex items-center justify-center pointer-events-none">
+                      <Badge
+                        variant="destructive"
+                        className="font-black text-xs md:text-sm px-2.5 py-1 shadow-md"
+                      >
+                        HẾT NGUYÊN LIỆU
+                      </Badge>
                     </div>
                   )}
-                  <Badge className="absolute top-2 left-2 bg-background/80 text-foreground">
-                    {item.category?.name}
-                  </Badge>
-                </div>
-                <CardContent className="p-3">
-                  <h3 className="font-medium text-sm truncate">{item.name}</h3>
-                  <p className="font-bold text-primary mt-1">
-                    {formatCurrency(item.price)}
-                  </p>
-                </CardContent>
-              </Card>
-            ))}
+
+                  <div className="aspect-square bg-muted relative overflow-hidden">
+                    {item.image_url ? (
+                      <img
+                        src={item.image_url}
+                        alt={item.name}
+                        className="absolute inset-0 object-cover w-full h-full"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPreviewImage(item.image_url!);
+                        }}
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-full text-4xl">
+                        🍽️
+                      </div>
+                    )}
+                    <Badge className="absolute top-2 left-2 bg-background/80 text-foreground">
+                      {item.category?.name}
+                    </Badge>
+                  </div>
+                  <CardContent className="p-3">
+                    <h3 className="font-medium text-sm truncate">
+                      {item.name}
+                    </h3>
+                    <div className="flex items-center justify-between mt-1 flex-wrap gap-1">
+                      <p className="font-bold text-primary">
+                        {formatCurrency(item.price)}
+                      </p>
+                      {stockInfo &&
+                        stockInfo.max_quantity > 0 &&
+                        stockInfo.max_quantity <= 10 && (
+                          <span className="text-[10px] text-orange-500 font-medium bg-orange-50 px-1.5 py-0.5 rounded">
+                            Còn {stockInfo.max_quantity} suất
+                          </span>
+                        )}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         </ScrollArea>
       </div>
@@ -486,7 +561,6 @@ export function POSContent({ tables, categories, menuItems }: POSContentProps) {
           />
         </div>
       )}
-      
     </div>
   );
 }

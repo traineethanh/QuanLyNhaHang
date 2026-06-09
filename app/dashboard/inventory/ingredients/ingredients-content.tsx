@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo, Fragment, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   Plus,
@@ -80,6 +80,15 @@ export function IngredientsContent({
   const [categories, setCategories] = useState<Category[]>(initialCategories);
   const [ingredients, setIngredients] =
     useState<Ingredient[]>(initialIngredients);
+
+  useEffect(() => {
+    setIngredients(initialIngredients);
+  }, [initialIngredients]);
+
+  useEffect(() => {
+    setCategories(initialCategories);
+  }, [initialCategories]);
+
   const [selectedCatId, setSelectedCatId] = useState<string>("all");
 
   // Bộ lọc thông minh hàng đầu
@@ -378,7 +387,10 @@ export function IngredientsContent({
                 <Plus className="h-4 w-4" /> Khai báo vật tư mới
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[425px]" aria-describedby={undefined}>
+            <DialogContent
+              className="sm:max-w-[425px]"
+              aria-describedby={undefined}
+            >
               <DialogHeader>
                 <DialogTitle>Thêm nguyên liệu gốc</DialogTitle>
               </DialogHeader>
@@ -771,7 +783,10 @@ export function IngredientsContent({
 
       {/* DIALOG THIẾT LẬP QUY ĐỔI ĐƠN VỊ TÍNH (UoM) */}
       <Dialog open={isUomOpen} onOpenChange={setIsUomOpen}>
-        <DialogContent className="sm:max-w-[400px]" aria-describedby={undefined}>
+        <DialogContent
+          className="sm:max-w-[400px]"
+          aria-describedby={undefined}
+        >
           <DialogHeader>
             <DialogTitle>Quy đổi đơn vị: {activeIng?.name}</DialogTitle>
           </DialogHeader>
