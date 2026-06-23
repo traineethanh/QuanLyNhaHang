@@ -13,14 +13,8 @@ async function getInitialRecipesData() {
 
   // Kéo danh sách món ăn và nguyên liệu gốc để làm mồi cho giao diện định lượng
   const [{ data: menuItems }, { data: ingredients }] = await Promise.all([
-    supabase
-      .from("menu_items")
-      .select("*")
-      .order("name"),
-    supabase
-      .from("ingredients")
-      .select("*")
-      .order("name"),
+    supabase.from("menu_items").select("*").order("name"),
+    supabase.from("ingredients").select("*").order("name"),
   ]);
 
   return {
@@ -46,7 +40,9 @@ export default async function RecipesPage() {
 
   const userRole = profile?.role as UserRole;
 
-  if (userRole !== "manager") redirect("/dashboard");
+  if (userRole !== "manager" && userRole !== "kitchen") {
+    redirect("/dashboard");
+  }
   // =========================================================================
 
   const data = await getInitialRecipesData();

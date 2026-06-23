@@ -4,7 +4,6 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import type { UserRole } from "@/lib/types/database";
-import { IdleLogout } from "@/components/dashboard/idle-logout";
 
 // Chống lưu cache theo đúng kiến trúc của bạn
 export const dynamic = "force-dynamic";
@@ -40,7 +39,6 @@ export default async function DashboardLayout({
 
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-      {/* <IdleLogout /> COMPONENT TỰ ĐỘNG ĐĂNG XUẤT CHẠY NGẦM */}
       {/* SidebarProvider mặc định đã là full màn hình, không bọc thêm div h-screen bên ngoài nó */}
       <SidebarProvider>
         <AppSidebar />

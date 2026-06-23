@@ -160,8 +160,7 @@ export function POSContent({ tables, categories, menuItems }: POSContentProps) {
     (sum, item) => sum + item.menuItem.price * item.quantity,
     0,
   );
-  const tax = subtotal * 0.1;
-  const total = subtotal + tax;
+  const total = subtotal;
 
   const selectedTableData = tables.find((t) => t.id === selectedTable);
 
@@ -497,10 +496,10 @@ export function POSContent({ tables, categories, menuItems }: POSContentProps) {
               </span>
               <span>{formatCurrency(subtotal)}</span>
             </div>
-            <div className="flex justify-between">
+            {/* <div className="flex justify-between">
               <span className="text-muted-foreground">VAT (10%)</span>
               <span>{formatCurrency(tax)}</span>
-            </div>
+            </div> */}
             <Separator />
             <div className="flex justify-between text-lg font-bold">
               <span>Tổng cộng</span>

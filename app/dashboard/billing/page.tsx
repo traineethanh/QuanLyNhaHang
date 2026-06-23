@@ -8,8 +8,14 @@ export const revalidate = 10;
 async function getBillingData() {
   const supabase = await createClient();
 
+  // 1. Mốc thời gian ngày hôm nay (dùng để tính doanh thu hôm nay)
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+
+  // 2. Mốc thời gian 30 ngày trước (dùng để lấy lịch sử đơn hàng cho bộ lọc)
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30); // Lấy dữ liệu trong vòng 30 ngày qua
+  thirtyDaysAgo.setHours(0, 0, 0, 0);
 
   const [{ data: orders }, { data: todayPayments }] = await Promise.all([
     supabase
@@ -21,14 +27,14 @@ async function getBillingData() {
         items:order_items(*, menu_item:menu_items(*))
       `,
       )
-      .gte("created_at", today.toISOString()) // Lấy mọi đơn trong ngày bao gồm cả 'completed'
+      .gte("created_at", thirtyDaysAgo.toISOString()) // 🔥 THAY ĐỔI TẠI ĐÂY: Lấy đơn 30 ngày qua để bộ lọc ngày hoạt động được
       .order("created_at", { ascending: false }),
 
     supabase
       .from("payments")
       .select("*")
       .eq("status", "paid")
-      .gte("created_at", today.toISOString()),
+      .gte("created_at", today.toISOString()), // 💎 GIỮ NGUYÊN: Để tính chính xác doanh thu của riêng ngày hôm nay
   ]);
 
   const todayRevenue =
@@ -48,12 +54,12 @@ export default async function BillingPage() {
   const { orders, stats } = await getBillingData();
 
   return (
-    <div className="flex-1 space-y-4 p-8 pt-6">
-      {/* ĐÃ SỬA: Xóa bỏ thuộc tính description ở đây để hết hoàn toàn gạch đỏ */}
-      <Header title="Thanh toán & Hóa đơn" />
-
-      {/* Truyền dữ liệu xuống component con kèm ép kiểu cô lập an toàn */}
-      <BillingContent orders={orders as any} stats={stats} />
+    <div className="space-y-6">
+      <Header
+        title="Thanh toán & Hóa đơn"
+        // description="Xử lý thanh toán hóa đơn bàn ăn và quản lý nhật ký giao dịch."
+      />
+      <BillingContent orders={orders} stats={stats} />
     </div>
   );
 }

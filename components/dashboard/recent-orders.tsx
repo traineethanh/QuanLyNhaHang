@@ -87,7 +87,7 @@ export function RecentOrders({ orders }: RecentOrdersProps) {
           </p>
         </div>
         <Button variant="ghost" size="sm" asChild>
-          <Link href="/dashboard/pos" className="flex items-center gap-1">
+          <Link href="/dashboard/billing" className="flex items-center gap-1">
             Xem tất cả
             <ArrowRight className="h-4 w-4" />
           </Link>

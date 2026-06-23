@@ -12,6 +12,13 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -28,20 +35,29 @@ import {
   Building2,
   CheckCircle,
   Printer,
+  Search,
+  Calendar,
+  Filter,
+  History,
+  ArrowRight,
 } from "lucide-react";
 
+// Định nghĩa Interface riêng biệt tránh lỗi cú pháp inline khi biên dịch
+export interface ExtendedOrder extends Order {
+  table?: Table;
+  items?: (OrderItem & { menu_item?: MenuItem })[];
+  payment_method?: string;
+  payments?: any[]; // Dự phòng trường hợp dữ liệu quan hệ từ Supabase kết nối qua bảng payments
+}
+
 interface BillingContentProps {
-  orders: (Order & {
-    table?: Table;
-    items?: (OrderItem & { menu_item?: MenuItem })[];
-  })[];
+  orders: ExtendedOrder[];
   stats: {
     todayRevenue: number;
     todayTransactions: number;
   };
 }
 
-// Hàm format tiền tệ VNĐ
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat("vi-VN", {
     style: "currency",
@@ -49,7 +65,6 @@ function formatCurrency(amount: number) {
   }).format(amount);
 }
 
-// Hàm format hiển thị giờ giấc
 function formatTime(dateString: string) {
   return new Date(dateString).toLocaleTimeString("vi-VN", {
     hour: "2-digit",
@@ -57,7 +72,14 @@ function formatTime(dateString: string) {
   });
 }
 
-// Danh sách các phương thức thanh toán tại nhà hàng
+function formatDate(dateString: string) {
+  return new Date(dateString).toLocaleDateString("vi-VN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
 const paymentMethods = [
   { value: "cash", label: "Tiền mặt", icon: Banknote },
   { value: "card", label: "Thẻ", icon: CreditCard },
@@ -73,30 +95,43 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
   const [discount, setDiscount] = useState("");
   const [isPrinting, setIsPrinting] = useState(false);
 
+  // --- LẤY NGÀY MẶC ĐỊNH CHO BỘ LỌC KHOẢNG NGÀY ---
+  const todayStr = new Date().toISOString().split("T")[0];
+  // Mặc định Ngày bắt đầu là đầu tháng hiện tại
+  const firstDayOfMonthStr = (() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1)
+      .toISOString()
+      .split("T")[0];
+  })();
+
+  // --- STATE BỘ LỌC LỊCH SỬ ---
+  const [startDate, setStartDate] = useState(firstDayOfMonthStr);
+  const [endDate, setEndDate] = useState(todayStr);
+  const [filterPayment, setFilterPayment] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
+
   const router = useRouter();
 
-  // --- TINH NĂNG CỐT LÕI: GỘP CÁC ĐƠN HÀNG CỦA CÙNG 1 BÀN THÀNH 1 HÓA ĐƠN DUY NHẤT ---
+  // --- TINH NĂNG CỐT LÕI: GỘP CÁC ĐƠN HÀNG CỦA CÙNG 1 BÀN ---
   const groupedOrders = useMemo(() => {
     const groups: { [key: string]: any } = {};
 
     orders.forEach((order) => {
-      // Chỉ gộp các đơn hàng chưa thanh toán (loại trừ các đơn mang trạng thái completed)
       if (order.status?.toLowerCase() === "completed") return;
 
-      const tableId = order.table_id || "takeaway"; // Nếu không có bàn thì quy về đơn mang về (takeaway)
+      const tableId = order.table_id || "takeaway";
 
       if (!groups[tableId]) {
-        // Khởi tạo nhóm bàn ăn mới nếu chưa tồn tại
         groups[tableId] = {
           ...order,
           items: [...(order.items || [])],
           subtotal: Number(order.subtotal),
           tax: Number(order.tax),
           total: Number(order.total),
-          order_ids: [order.id], // Lưu lại mảng id các đơn để chốt loạt một lúc
+          order_ids: [order.id],
         };
       } else {
-        // Nếu bàn này đã có đơn trước đó, tiến hành cộng dồn món và tiền bạc
         groups[tableId].items = [
           ...groups[tableId].items,
           ...(order.items || []),
@@ -111,28 +146,63 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
     return Object.values(groups);
   }, [orders]);
 
-  // --- LOGIC TÍNH TOÁN THỐNG KÊ DOANH THU THỜI GIAN THỰC ---
-  // Lọc ra các đơn mang trạng thái hoàn thành để tính các thông số phụ trợ
-  const completedOrders = orders.filter(
-    (o) => o.status?.toLowerCase() === "completed",
-  );
+  // --- LOGIC LỌC DANH SÁCH LỊCH SỬ ĐÃ ĐƯỢC FIX LỖI TRIỆT ĐỂ ---
+  const filteredCompletedOrders = useMemo(() => {
+    return orders.filter((order) => {
+      // 1. Chỉ lấy đơn đã hoàn thành
+      if (order.status?.toLowerCase() !== "completed") return false;
 
-  // Sử dụng dữ liệu stats chính xác được file page.tsx truyền xuống
+      // 2. Lọc theo khoảng ngày tạo đơn (Chuẩn theo Giờ Địa Phương - Local Time)
+      const localDate = new Date(order.created_at);
+      const year = localDate.getFullYear();
+      const month = String(localDate.getMonth() + 1).padStart(2, "0");
+      const day = String(localDate.getDate()).padStart(2, "0");
+      const orderDateStr = `${year}-${month}-${day}`;
+
+      if (startDate && orderDateStr < startDate) return false;
+      if (endDate && orderDateStr > endDate) return false;
+
+      // 3. Lọc phương thức thanh toán an toàn (Bảo vệ khi bị undefined)
+      // Thử lấy từ order.payment_method hoặc từ mảng quan hệ payments nếu có
+      const actualPaymentMethod =
+        order.payment_method ||
+        (order.payments && order.payments[0]?.payment_method);
+      if (filterPayment !== "all") {
+        if (!actualPaymentMethod || actualPaymentMethod !== filterPayment)
+          return false;
+      }
+
+      // 4. Tìm kiếm theo mã đơn hoặc tên bàn
+      if (searchQuery.trim() !== "") {
+        const query = searchQuery.toLowerCase();
+        const matchesOrderNum = order.order_number?.toString().includes(query);
+        const matchesTableName = order.table?.name
+          ?.toLowerCase()
+          .includes(query);
+        if (!matchesOrderNum && !matchesTableName) return false;
+      }
+
+      return true;
+    });
+  }, [orders, startDate, endDate, filterPayment, searchQuery]);
+
   const todayRevenue = stats.todayRevenue;
   const completedTransactionsCount = stats.todayTransactions;
 
-  // Các phép toán thống kê phụ trợ hiển thị trên giao diện thẻ
   const averagePerOrder =
     completedTransactionsCount > 0
       ? todayRevenue / completedTransactionsCount
       : 0;
   const highestOrderTotal =
-    completedOrders.length > 0
-      ? Math.max(...completedOrders.map((o) => Number(o.total) || 0))
+    orders.filter((o) => o.status?.toLowerCase() === "completed").length > 0
+      ? Math.max(
+          ...orders
+            .filter((o) => o.status?.toLowerCase() === "completed")
+            .map((o) => Number(o.total) || 0),
+        )
       : 0;
   const totalPendingBillingCount = groupedOrders.length;
 
-  // Xử lý kích hoạt mở dialog tính tiền
   const handlePayment = (order: any) => {
     setSelectedOrder(order);
     const orderTotal = order.total || 0;
@@ -147,25 +217,20 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
     setTimeout(() => setIsPrinting(false), 500);
   };
 
-  // Tính toán chi phí thực tế (Tạm tính, giảm giá, VAT, Tổng tiền sau cùng)
   const calculateTotal = () => {
     if (!selectedOrder)
       return { subtotal: 0, discountAmount: 0, tax: 0, total: 0 };
-
     const subtotal = selectedOrder.subtotal || 0;
     const discountAmount = parseFloat(discount) || 0;
-    const taxableAmount = Math.max(0, subtotal - discountAmount);
-    const tax = taxableAmount * 0.1;
-    const total = taxableAmount + tax;
-
+    const tax = 0;
+    const total = Math.max(0, subtotal - discountAmount);
     return { subtotal, discountAmount, tax, total };
   };
 
-  const { subtotal, discountAmount, tax, total } = calculateTotal();
+  const { subtotal, discountAmount, total } = calculateTotal();
   const received = parseFloat(receivedAmount) || 0;
   const change = received - total;
 
-  // Bấm nút xác nhận thanh toán cuối cùng gửi về API xử lý
   const handleConfirmPayment = async () => {
     if (!selectedOrder) return;
 
@@ -176,7 +241,6 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          // Bắn toàn bộ mảng ID đơn hàng đã được gộp của bàn này lên API chốt một thể
           order_ids: selectedOrder.order_ids || [selectedOrder.id],
           table_id: selectedOrder.table_id || "takeaway",
           amount: total,
@@ -193,23 +257,20 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
       if (!response.ok) throw new Error(result.error || "Thanh toán thất bại");
 
       setIsPaymentDialogOpen(false);
-      router.refresh(); // Gọi làm mới để server cập nhật doanh thu mới nhất lập tức
+      router.refresh();
 
-      alert(
-        "Hóa đơn đã được chốt thành công! Bàn đã chuyển sang trạng thái chờ dọn dẹp.",
-      );
+      alert("Hóa đơn đã được chốt thành công!");
     } catch (error: any) {
       console.error(error);
       alert(error.message || "Không thể chốt thanh toán. Vui lòng thử lại!");
-    }
-    {
+    } finally {
       setIsPrinting(false);
     }
   };
 
   return (
     <div className="space-y-6">
-      {/* Khối thẻ Thống kê Tài chính Phía trên */}
+      {/* Khối thẻ Thống kê Tài chính */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="border-none bg-rose-500/5 shadow-xs rounded-xl">
           <CardContent className="p-5 flex items-center gap-4">
@@ -359,7 +420,6 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
 
                     <ScrollArea className="h-[100px] mb-4 rounded-lg border border-border/50 p-3">
                       <div className="space-y-2 text-sm">
-                        {/* ĐÃ SỬA CHUẨN: Duyệt món ăn thuộc chính xác nhóm đơn của bàn này, không bị lặp món bàn khác */}
                         {order.items?.map((item: any, dynamicIdx: number) => (
                           <div
                             key={`${item.id}-${dynamicIdx}`}
@@ -405,7 +465,188 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
         </CardContent>
       </Card>
 
-      {/* Hộp thoại Dialog Xử lý thanh toán chi tiết */}
+      {/* Nhật ký lịch sử hóa đơn */}
+      <Card className="border border-border/80 shadow-xs">
+        <CardHeader className="border-b bg-muted/20 pb-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-2">
+              <History className="h-5 w-5 text-indigo-600" />
+              <div>
+                <CardTitle className="text-xl font-bold">
+                  Nhật ký hóa đơn đã thanh toán
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Tra cứu, xem lại và in lại các hóa đơn đã chốt hoàn thành
+                  trong hệ thống.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 mt-4 pt-2">
+            {/* Cụm bộ lọc Khoảng ngày */}
+            <div className="lg:col-span-6 space-y-1">
+              <Label className="text-[11px] font-bold text-muted-foreground uppercase flex items-center gap-1">
+                <Calendar className="h-3 w-3" /> Lọc theo khoảng ngày tạo đơn
+              </Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="h-9 rounded-xl text-sm w-full"
+                />
+                <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                <Input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="h-9 rounded-xl text-sm w-full"
+                />
+              </div>
+            </div>
+
+            {/* Cụm bộ lọc Phương thức */}
+            <div className="lg:col-span-3 space-y-1">
+              <Label className="text-[11px] font-bold text-muted-foreground uppercase flex items-center gap-1">
+                <Filter className="h-3 w-3" /> Hình thức thanh toán
+              </Label>
+              <Select value={filterPayment} onValueChange={setFilterPayment}>
+                <SelectTrigger className="h-9 rounded-xl text-sm">
+                  <SelectValue placeholder="Tất cả hình thức" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tất cả hình thức</SelectItem>
+                  <SelectItem value="cash">💵 Tiền mặt</SelectItem>
+                  <SelectItem value="card">💳 Quẹt thẻ</SelectItem>
+                  <SelectItem value="transfer">🏦 Chuyển khoản</SelectItem>
+                  <SelectItem value="qr">📱 Quét mã QR</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Cụm ô Tìm kiếm nhanh */}
+            <div className="lg:col-span-3 space-y-1">
+              <Label className="text-[11px] font-bold text-muted-foreground uppercase flex items-center gap-1">
+                <Search className="h-3 w-3" /> Tìm kiếm nhanh
+              </Label>
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Số hóa đơn, tên bàn..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="h-9 pl-9 rounded-xl text-sm"
+                />
+              </div>
+            </div>
+          </div>
+        </CardHeader>
+
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left border-collapse">
+              <thead>
+                <tr className="border-b bg-muted/40 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                  <th className="p-4 w-[120px]">Mã đơn</th>
+                  <th className="p-4">Thời gian</th>
+                  <th className="p-4">Phòng / Bàn</th>
+                  <th className="p-4 text-center">Số khách</th>
+                  <th className="p-4">Thanh toán</th>
+                  <th className="p-4 text-right">Tổng hóa đơn</th>
+                  <th className="p-4 text-center w-[100px]">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredCompletedOrders.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="p-8 text-center text-muted-foreground"
+                    >
+                      Không tìm thấy hóa đơn nào khớp với khoảng ngày hoặc điều
+                      kiện lọc đã chọn.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredCompletedOrders.map((order) => {
+                    const currentMethod =
+                      order.payment_method ||
+                      (order.payments && order.payments[0]?.payment_method) ||
+                      "cash";
+                    const method = paymentMethods.find(
+                      (m) => m.value === currentMethod,
+                    ) || {
+                      label: "Tiền mặt",
+                      icon: Banknote,
+                    };
+                    return (
+                      <tr
+                        key={order.id}
+                        className="border-b hover:bg-muted/20 transition-colors last:border-none"
+                      >
+                        <td className="p-4 font-bold text-slate-800">
+                          #{order.order_number}
+                        </td>
+                        <td className="p-4 text-xs space-y-0.5">
+                          <div className="font-semibold">
+                            {formatTime(order.created_at)}
+                          </div>
+                          <div className="text-muted-foreground">
+                            {formatDate(order.created_at)}
+                          </div>
+                        </td>
+                        <td className="p-4">
+                          <Badge
+                            variant="outline"
+                            className="font-medium bg-slate-50"
+                          >
+                            {order.table?.name || "🛍️ Mang về"}
+                          </Badge>
+                        </td>
+                        <td className="p-4 text-center text-muted-foreground">
+                          {order.guest_count}
+                        </td>
+                        <td className="p-4">
+                          <div className="flex items-center gap-1.5 text-xs font-medium">
+                            <method.icon className="h-3.5 w-3.5 text-slate-500" />
+                            <span>{method.label}</span>
+                          </div>
+                        </td>
+                        <td className="p-4 text-right font-bold text-emerald-600">
+                          {formatCurrency(order.total)}
+                        </td>
+                        <td className="p-4 text-center">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8 text-slate-500 hover:text-primary rounded-lg"
+                            onClick={() => {
+                              setSelectedOrder({
+                                ...order,
+                                order_ids: [order.id],
+                              });
+                              setReceivedAmount((order.total || 0).toString());
+                              setDiscount((order.discount || 0).toString());
+                              setPaymentMethod(currentMethod);
+                              setIsPaymentDialogOpen(true);
+                            }}
+                          >
+                            <Printer className="h-4 w-4" />
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Hộp thoại Dialog Xem Chi Tiết / Xử lý thanh toán */}
       <Dialog open={isPaymentDialogOpen} onOpenChange={setIsPaymentDialogOpen}>
         <DialogContent className="max-w-md w-[95vw] max-h-[90vh] flex flex-col p-0 overflow-hidden rounded-2xl shadow-xl">
           <DialogHeader className="p-5 pb-4 border-b bg-muted/20 shrink-0">
@@ -442,7 +683,6 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
                 Chi tiết món ăn (Đơn gộp)
               </Label>
               <ScrollArea className="h-[130px] rounded-xl border border-border/60 p-3 bg-muted/10">
-                {/* ĐÃ SỬA CHUẨN: Chỉ map danh sách món ăn thuộc riêng bàn đang được chọn tính tiền */}
                 {selectedOrder?.items?.map((item: any, dynamicIdx: number) => (
                   <div
                     key={`${item.id}-${dynamicIdx}`}
@@ -464,7 +704,6 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
               </ScrollArea>
             </div>
 
-            {/* Chọn Phương thức thanh toán */}
             <div className="space-y-2">
               <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
                 Chọn phương thức thanh toán
@@ -479,6 +718,9 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
                     }
                     className="flex-col h-auto py-2.5 rounded-xl border transition-all"
                     onClick={() => setPaymentMethod(method.value)}
+                    disabled={
+                      selectedOrder?.status?.toLowerCase() === "completed"
+                    }
                   >
                     <method.icon className="h-4 w-4 mb-1" />
                     <span className="text-[11px] font-bold">
@@ -489,7 +731,6 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
               </div>
             </div>
 
-            {/* Mục nhập Giảm giá */}
             <div className="space-y-1.5">
               <Label
                 htmlFor="discount"
@@ -504,10 +745,10 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
                 value={discount}
                 onChange={(e) => setDiscount(e.target.value)}
                 className="rounded-xl h-9"
+                disabled={selectedOrder?.status?.toLowerCase() === "completed"}
               />
             </div>
 
-            {/* Ô nhập Tiền mặt khách đưa (Chỉ hiện khi chọn tiền mặt) */}
             {paymentMethod === "cash" && (
               <div className="space-y-1.5">
                 <Label
@@ -523,11 +764,13 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
                   value={receivedAmount}
                   onChange={(e) => setReceivedAmount(e.target.value)}
                   className="rounded-xl h-10 text-lg font-bold text-primary"
+                  disabled={
+                    selectedOrder?.status?.toLowerCase() === "completed"
+                  }
                 />
               </div>
             )}
 
-            {/* Bảng kê tổng tiền tài chính cuối cùng */}
             <div className="space-y-2 pt-3 border-t border-border/80">
               <div className="flex justify-between text-xs font-medium text-muted-foreground">
                 <span>Tạm tính</span>
@@ -544,13 +787,6 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
                   </span>
                 </div>
               )}
-
-              <div className="flex justify-between text-xs font-medium text-muted-foreground">
-                <span>VAT (10%)</span>
-                <span className="font-bold text-slate-800">
-                  {formatCurrency(tax)}
-                </span>
-              </div>
 
               <Separator className="my-1" />
 
@@ -588,7 +824,7 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
               onClick={() => setIsPaymentDialogOpen(false)}
               className="font-bold rounded-xl h-9"
             >
-              Hủy
+              Đóng lại
             </Button>
             <Button
               type="button"
@@ -600,15 +836,19 @@ export function BillingContent({ orders, stats }: BillingContentProps) {
               <Printer className="h-4 w-4 mr-1.5" />
               {isPrinting ? "Đang in..." : "In bill"}
             </Button>
-            <Button
-              type="button"
-              className="font-black rounded-xl h-9 bg-emerald-600 hover:bg-emerald-700 text-white"
-              onClick={handleConfirmPayment}
-              disabled={isPrinting || (paymentMethod === "cash" && change < 0)}
-            >
-              <CheckCircle className="h-4 w-4 mr-1.5" />
-              {isPrinting ? "Đang xử lý..." : "Chốt thanh toán"}
-            </Button>
+            {selectedOrder?.status?.toLowerCase() !== "completed" && (
+              <Button
+                type="button"
+                className="font-black rounded-xl h-9 bg-emerald-600 hover:bg-emerald-700 text-white"
+                onClick={handleConfirmPayment}
+                disabled={
+                  isPrinting || (paymentMethod === "cash" && change < 0)
+                }
+              >
+                <CheckCircle className="h-4 w-4 mr-1.5" />
+                {isPrinting ? "Đang xử lý..." : "Chốt thanh toán"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

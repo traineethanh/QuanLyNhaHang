@@ -46,10 +46,6 @@ interface ReservationsContentProps {
 }
 
 const statusConfig = {
-  pending: {
-    label: "Chờ xác nhận",
-    className: "bg-amber-500/10 text-amber-600 border-none font-bold",
-  },
   confirmed: {
     label: "Đã xác nhận",
     className: "bg-blue-500/10 text-blue-600 border-none font-bold",
@@ -76,7 +72,6 @@ export function ReservationsContent({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [loading, setLoading] = useState<string | null>(null);
 
-  // --- BƯỚC 1: TRA CỨU NHANH TÌNH TRẠNG KHO BÀN TRỐNG ---
   const [checkDate, setCheckDate] = useState(() => {
     const today = new Date();
     return today.toISOString().split("T")[0];
@@ -84,7 +79,6 @@ export function ReservationsContent({
   const [checkTime, setCheckTime] = useState("19:00");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // --- BƯỚC 2: FORM GHI NHẬN THÔNG TIN ĐẶT BÀN ---
   const [formData, setFormData] = useState({
     customer_name: "",
     customer_phone: "",
@@ -94,34 +88,40 @@ export function ReservationsContent({
     note: "",
   });
 
-  // 🔥 SỬA LỖI 1: Đồng bộ trạng thái Có khách (occupied) từ Sơ đồ bàn thực tế vào bộ lọc đặt bàn
+  const upcomingLockReservations = useMemo(() => {
+    const now = new Date();
+    return reservations.filter((res) => {
+      if (res.status !== "confirmed") return false;
+      const resTime = new Date(res.reservation_time);
+      const timeDiffMinutes = (resTime.getTime() - now.getTime()) / (1000 * 60);
+      return timeDiffMinutes <= 90 && timeDiffMinutes > 0;
+    });
+  }, [reservations]);
+
   const availabilityReport = useMemo(() => {
     if (!checkDate || !checkTime)
       return { available: [], occupiedOrReserved: [] };
 
     const targetDateTime = new Date(`${checkDate}T${checkTime}:00`);
     const targetTimeMs = targetDateTime.getTime();
-    const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
-    // Kiểm tra trùng lịch hẹn đặt trước
+    const NINETY_MINS_MS = 90 * 60 * 1000;
+
     const activeReservationsAtSlot = reservations.filter((res) => {
       if (res.status === "cancelled" || res.status === "no_show") return false;
       const resTimeMs = new Date(res.reservation_time).getTime();
-      return Math.abs(resTimeMs - targetTimeMs) < TWO_HOURS_MS;
+      return Math.abs(resTimeMs - targetTimeMs) <= NINETY_MINS_MS;
     });
 
     const busyTableIdsFromReservations = activeReservationsAtSlot
       .map((res) => res.table_id)
       .filter(Boolean);
 
-    // Lọc phân loại bàn trống / bàn bận
     const available: any[] = [];
     const occupiedOrReserved: any[] = [];
 
     tables.forEach((table) => {
       const isReservedInSlot = busyTableIdsFromReservations.includes(table.id);
-
-      // Nếu bàn đang có khách ngồi ăn thực tế (occupied) hoặc đang dọn dẹp (cleaning) ở hiện tại
       const isOccupiedRightNow =
         table.status === "occupied" ||
         table.status === "cleaning" ||
@@ -153,16 +153,47 @@ export function ReservationsContent({
     e.preventDefault();
     try {
       setLoading("create");
+
+      // Tạo lịch đặt bàn
       const response = await fetch("/api/reservations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({ ...formData, status: "confirmed" }),
       });
 
       if (!response.ok) {
         const err = await response.json();
         alert(err.error || "Có lỗi xảy ra khi tạo lịch đặt");
         return;
+      }
+
+      // 🔥 FIX LỖI KHÓA BÀN SỚM: Ép sơ đồ bàn nhả khóa nếu chưa tới 1h30 phút
+      if (formData.table_id && formData.table_id !== "none") {
+        const targetTimeMs = new Date(formData.reservation_time).getTime();
+        const nowMs = Date.now();
+        const timeDiffMins = (targetTimeMs - nowMs) / (1000 * 60);
+
+        const tableInfo = tables.find((t) => t.id === formData.table_id);
+
+        if (timeDiffMins > 90) {
+          // Nếu thời gian > 90p, đảm bảo bàn vẫn 'available' để khách khác dùng tạm
+          if (tableInfo && tableInfo.status !== "occupied") {
+            await fetch(`/api/tables/${formData.table_id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status: "available" }),
+            });
+          }
+        } else {
+          // Nếu < 90p, lập tức khóa bàn thành 'reserved'
+          if (tableInfo && tableInfo.status === "available") {
+            await fetch(`/api/tables/${formData.table_id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status: "reserved" }),
+            });
+          }
+        }
       }
 
       setIsModalOpen(false);
@@ -174,9 +205,16 @@ export function ReservationsContent({
     }
   };
 
-  const handleUpdateStatus = async (id: string, newStatus: string) => {
+  // Cập nhật hàm xử lý trạng thái để truyền thêm tableId
+  const handleUpdateStatus = async (
+    id: string,
+    newStatus: string,
+    tableId?: string,
+  ) => {
     try {
       setLoading(id);
+
+      // 1. Cập nhật trạng thái lịch hẹn
       const response = await fetch(`/api/reservations/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -189,6 +227,32 @@ export function ReservationsContent({
         return;
       }
 
+      // 🔥 FIX LỖI TRẢ BÀN: Đồng bộ lại trạng thái cho Sơ đồ bàn
+      if (tableId) {
+        const tableInfo = tables.find((t) => t.id === tableId);
+
+        if (newStatus === "cancelled" || newStatus === "no_show") {
+          // Chỉ trả trạng thái trống NẾU bàn đang bị khóa (reserved).
+          // Khỏi cần chuyển lại nếu bàn đang có khách (occupied).
+          if (tableInfo && tableInfo.status === "reserved") {
+            await fetch(`/api/tables/${tableId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status: "available" }),
+            });
+          }
+        } else if (newStatus === "seated") {
+          // Tự động báo Sơ đồ bàn là có khách khi ấn 'Nhận bàn & Mở đơn POS'
+          if (tableInfo && tableInfo.status !== "occupied") {
+            await fetch(`/api/tables/${tableId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status: "occupied" }),
+            });
+          }
+        }
+      }
+
       router.refresh();
     } catch (error) {
       console.error(error);
@@ -199,9 +263,10 @@ export function ReservationsContent({
 
   const filteredReservations = useMemo(() => {
     return reservations.filter((res) => {
-      const matchQuery = searchQuery
-        ? res.customer_phone.includes(searchQuery) ||
-          res.customer_name.toLowerCase().includes(searchQuery.toLowerCase())
+      const query = searchQuery.toLowerCase();
+      const matchQuery = query
+        ? (res.customer_phone && res.customer_phone.includes(query)) ||
+          (res.customer_name && res.customer_name.toLowerCase().includes(query))
         : true;
       return matchQuery;
     });
@@ -209,27 +274,48 @@ export function ReservationsContent({
 
   const stats = useMemo(() => {
     return {
-      pending: reservations.filter((r) => r.status === "pending").length,
+      total: reservations.length,
       confirmed: reservations.filter((r) => r.status === "confirmed").length,
       seated: reservations.filter((r) => r.status === "seated").length,
-      no_show: reservations.filter((r) => r.status === "no_show").length,
+      cancelled_noshow: reservations.filter(
+        (r) => r.status === "cancelled" || r.status === "no_show",
+      ).length,
     };
   }, [reservations]);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto p-1">
-      {/* KHỐI CHỈ SỐ THỐNG KÊ KPI */}
+      {upcomingLockReservations.length > 0 && (
+        <Card className="rounded-2xl border-amber-200 bg-amber-50 shadow-sm animate-pulse">
+          <CardContent className="p-4 flex items-center gap-3">
+            <AlertTriangle className="h-6 w-6 text-amber-600" />
+            <div>
+              <h4 className="text-sm font-bold text-amber-800">
+                Chú ý: Có {upcomingLockReservations.length} bàn sắp đến giờ hẹn
+                (dưới 1h30 phút)
+              </h4>
+              <p className="text-xs text-amber-700/80 mt-0.5">
+                Hệ thống đang ưu tiên giữ các bàn này, vui lòng không xếp khách
+                vãng lai mới.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Card className="rounded-2xl border-slate-100 shadow-sm">
           <CardContent className="p-4 flex items-center justify-between">
             <div>
-              <p className="text-xs font-medium text-slate-500">Chờ xác nhận</p>
-              <h3 className="text-2xl font-bold text-amber-600 mt-1">
-                {stats.pending}
+              <p className="text-xs font-medium text-slate-500">
+                Tổng lịch hẹn
+              </p>
+              <h3 className="text-2xl font-bold text-slate-800 mt-1">
+                {stats.total}
               </h3>
             </div>
-            <div className="p-3 rounded-xl bg-amber-50 text-amber-600">
-              <HelpCircle size={20} />
+            <div className="p-3 rounded-xl bg-slate-100 text-slate-600">
+              <CalendarIcon size={20} />
             </div>
           </CardContent>
         </Card>
@@ -263,31 +349,30 @@ export function ReservationsContent({
           <CardContent className="p-4 flex items-center justify-between">
             <div>
               <p className="text-xs font-medium text-slate-500">
-                Quá hạn (No-Show)
+                Hủy / Quá hạn
               </p>
-              <h3 className="text-2xl font-bold text-purple-600 mt-1">
-                {stats.no_show}
+              <h3 className="text-2xl font-bold text-rose-600 mt-1">
+                {stats.cancelled_noshow}
               </h3>
             </div>
-            <div className="p-3 rounded-xl bg-purple-50 text-purple-600">
+            <div className="p-3 rounded-xl bg-rose-50 text-rose-600">
               <AlertTriangle size={20} />
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* BƯỚC 1: THANH KIỂM TRA NHANH KHO BÀN TRỐNG */}
       <Card className="rounded-3xl border-2 border-slate-100 shadow-md overflow-hidden bg-slate-50/50 dark:bg-slate-900/50">
         <div className="p-5 bg-white dark:bg-slate-900 border-b border-slate-100 space-y-4">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <h2 className="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2">
-                <Search size={18} className="text-indigo-600" /> Bước 1: Kiểm
-                tra nhanh tình trạng bàn trống
+                <Search size={18} className="text-indigo-600" /> Kiểm tra nhanh
+                tình trạng bàn trống
               </h2>
               <p className="text-xs text-slate-500">
-                Hệ thống quét tự động cả lịch đặt trước và tình trạng có khách
-                thực tế trên sơ đồ.
+                Hệ thống quét tự động cả lịch đặt trước 1h30 phút và tình trạng
+                có khách thực tế trên sơ đồ.
               </p>
             </div>
             <Button
@@ -382,65 +467,37 @@ export function ReservationsContent({
         </div>
       </Card>
 
-      {/* BƯỚC 3: DÒNG ĐỜI TRẠNG THÁI PIPELINE TABS */}
-      <Tabs defaultValue="pending" className="w-full">
-        <TabsList className="grid w-full grid-cols-5 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl h-12 gap-1">
-          <TabsTrigger
-            value="pending"
-            className="rounded-xl text-xs font-bold transition-all data-[state=active]:bg-white data-[state=active]:text-amber-600 shadow-none"
-          >
-            Chờ duyệt (
-            {filteredReservations.filter((r) => r.status === "pending").length})
-          </TabsTrigger>
+      <Tabs defaultValue="confirmed" className="w-full">
+        <TabsList className="grid w-full grid-cols-3 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl h-12 gap-1">
           <TabsTrigger
             value="confirmed"
             className="rounded-xl text-xs font-bold transition-all data-[state=active]:bg-white data-[state=active]:text-blue-600 shadow-none"
           >
-            Đã giữ bàn (
-            {
-              filteredReservations.filter((r) => r.status === "confirmed")
-                .length
-            }
-            )
+            Đã giữ bàn ({stats.confirmed})
           </TabsTrigger>
           <TabsTrigger
             value="seated"
             className="rounded-xl text-xs font-bold transition-all data-[state=active]:bg-white data-[state=active]:text-emerald-600 shadow-none"
           >
-            Đang ăn (
-            {filteredReservations.filter((r) => r.status === "seated").length})
+            Đang ăn ({stats.seated})
           </TabsTrigger>
           <TabsTrigger
-            value="no_show"
-            className="rounded-xl text-xs font-bold transition-all data-[state=active]:bg-white data-[state=active]:text-purple-600 shadow-none"
-          >
-            Quá hạn (
-            {filteredReservations.filter((r) => r.status === "no_show").length})
-          </TabsTrigger>
-          <TabsTrigger
-            value="cancelled"
+            value="cancelled_noshow"
             className="rounded-xl text-xs font-bold transition-all data-[state=active]:bg-white data-[state=active]:text-rose-600 shadow-none"
           >
-            Đã hủy (
-            {
-              filteredReservations.filter((r) => r.status === "cancelled")
-                .length
-            }
-            )
+            Đã hủy / Quá hạn ({stats.cancelled_noshow})
           </TabsTrigger>
         </TabsList>
 
-        {Object.keys(statusConfig).map((statusKey) => {
-          const listByStatus = filteredReservations.filter(
-            (r) => r.status === statusKey,
-          );
+        {["confirmed", "seated", "cancelled_noshow"].map((tabKey) => {
+          const listByStatus = filteredReservations.filter((r) => {
+            if (tabKey === "cancelled_noshow")
+              return r.status === "cancelled" || r.status === "no_show";
+            return r.status === tabKey;
+          });
 
           return (
-            <TabsContent
-              key={statusKey}
-              value={statusKey}
-              className="mt-4 space-y-3"
-            >
+            <TabsContent key={tabKey} value={tabKey} className="mt-4 space-y-3">
               {listByStatus.length === 0 ? (
                 <div className="text-center py-12 text-slate-400 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl italic text-xs">
                   Không có lịch đặt bàn nào ở mục này.
@@ -496,7 +553,6 @@ export function ReservationsContent({
                             {res.guest_count} khách
                           </span>
 
-                          {/* 🔥 SỬA LỖI 2: Hiển thị Bàn kèm số Tầng / Khu vực / Số phòng */}
                           <span className="flex items-center gap-1 font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md dark:bg-indigo-950/50 dark:text-indigo-300">
                             🪑{" "}
                             {res.table?.name
@@ -512,7 +568,6 @@ export function ReservationsContent({
                         )}
                       </div>
 
-                      {/* KHU VỰC ĐIỀU PHỐI HÀNH ĐỘNG VÀ CHECK-IN POS */}
                       <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
                         {loading === res.id && (
                           <span className="text-xs text-slate-400 animate-pulse mr-2">
@@ -520,51 +575,51 @@ export function ReservationsContent({
                           </span>
                         )}
 
-                        {res.status === "pending" && (
-                          <>
-                            <Button
-                              size="sm"
-                              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl h-9 text-xs shadow-sm"
-                              onClick={() =>
-                                handleUpdateStatus(res.id, "confirmed")
-                              }
-                            >
-                              Xác nhận lịch đặt
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-rose-600 border-rose-200 hover:bg-rose-50 font-bold rounded-xl h-9 text-xs"
-                              onClick={() =>
-                                handleUpdateStatus(res.id, "cancelled")
-                              }
-                            >
-                              Hủy lịch
-                            </Button>
-                          </>
-                        )}
-
                         {res.status === "confirmed" && (
                           <>
                             <Button
                               size="sm"
                               className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl h-9 text-xs shadow-sm flex items-center gap-1"
+                              // Đã thêm res.table_id
                               onClick={() =>
-                                handleUpdateStatus(res.id, "seated")
+                                handleUpdateStatus(
+                                  res.id,
+                                  "seated",
+                                  res.table_id,
+                                )
                               }
                             >
-                              <CheckCircle2 size={14} /> Khách đã đến (Nhận bàn
-                              & Mở đơn POS)
+                              <CheckCircle2 size={14} /> Nhận bàn & Mở đơn POS
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-rose-600 border-rose-200 hover:bg-rose-50 font-bold rounded-xl h-9 text-xs"
+                              // Đã thêm res.table_id
+                              onClick={() =>
+                                handleUpdateStatus(
+                                  res.id,
+                                  "cancelled",
+                                  res.table_id,
+                                )
+                              }
+                            >
+                              Hủy lịch
                             </Button>
                             <Button
                               size="sm"
                               variant="outline"
                               className="text-purple-600 border-purple-200 hover:bg-purple-50 font-bold rounded-xl h-9 text-xs"
+                              // Đã thêm res.table_id
                               onClick={() =>
-                                handleUpdateStatus(res.id, "no_show")
+                                handleUpdateStatus(
+                                  res.id,
+                                  "no_show",
+                                  res.table_id,
+                                )
                               }
                             >
-                              Quá hạn (No-Show)
+                              Quá hạn
                             </Button>
                           </>
                         )}
@@ -605,7 +660,6 @@ export function ReservationsContent({
         })}
       </Tabs>
 
-      {/* BƯỚC 2: DIALOG MODAL GHI NHẬN THÔNG TIN ĐẶT BÀN */}
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
         <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-auto rounded-3xl p-6 shadow-2xl bg-white dark:bg-slate-900">
           <DialogHeader>
@@ -614,8 +668,8 @@ export function ReservationsContent({
               Hàng
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Điền các thông tin cốt lõi của khách hàng. Hệ thống tự động khóa
-              sơ đồ bàn nếu chọn số bàn cụ thể.
+              Điền các thông tin cốt lõi của khách hàng. Sơ đồ bàn sẽ tự động
+              giữ chỗ khi khoảng thời gian chạm ngưỡng 1h30 phút.
             </DialogDescription>
           </DialogHeader>
 
