@@ -2,6 +2,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+export const dynamic = "force-dynamic";
+
 export async function PATCH(request: Request, context: any) {
   try {
     const paramsResolved =
@@ -18,7 +20,7 @@ export async function PATCH(request: Request, context: any) {
     }
 
     const body = await request.json();
-    const { status, table_id } = body; // Các trạng thái: pending | confirmed | seated | no_show | cancelled
+    const { status, table_id } = body;
 
     if (!status) {
       return NextResponse.json(
@@ -29,13 +31,11 @@ export async function PATCH(request: Request, context: any) {
 
     const supabase = await createClient();
 
-    // Chuẩn bị object cập nhật động
     const updatePayload: any = { status: status };
     if (table_id && table_id !== "none") {
       updatePayload.table_id = table_id;
     }
 
-    // 1. Cập nhật trạng thái của đơn đặt bàn
     const { data: updatedRes, error: resError } = await supabase
       .from("reservations")
       .update(updatePayload)
@@ -52,54 +52,51 @@ export async function PATCH(request: Request, context: any) {
 
     const finalTableId = table_id || updatedRes.table_id;
 
-    // =========================================================================
-    // 🔥 KỊCH BẢN CHECK-IN: LIÊN KẾT TRỰC TIẾP LUỒNG BÁN HÀNG POS (TỰ ĐỘNG SINH ORDER)
-    // =========================================================================
+    // 🔥 TẠO ORDER MỚI BÊN POS KHI KHÁCH ĐẾN NHẬN BÀN
     if (status === "seated" && finalTableId) {
-      // Hệ thống tự động mở một đơn hàng (Order) mới gắn liền với số bàn và số khách đã đặt
       const { error: orderError } = await supabase.from("orders").insert({
         table_id: finalTableId,
-        status: "opened", // Trạng thái đơn hàng đang mở để phục vụ gọi món
+        status: "opened",
         guest_count: updatedRes.guest_count || 2,
         note: updatedRes.note
           ? `[Khách đặt trước]: ${updatedRes.note}`
-          : "Đơn hàng tự động mở từ lịch đặt bàn",
+          : "Đơn hàng tự động mở",
       });
-
-      if (orderError) {
-        console.error("Lỗi tự động mở hóa đơn POS bán hàng:", orderError);
-      }
+      if (orderError) console.error("Lỗi tự động mở hóa đơn POS:", orderError);
     }
 
-    // =========================================================================
-    // 📊 ĐỒNG BỘ SƠ ĐỒ PHÒNG BÀN REAL-TIME
-    // =========================================================================
+    // 📊 ĐỒNG BỘ TRẠNG THÁI BÀN (NHẢ BÀN / KHÓA BÀN CHUẨN)
     if (finalTableId) {
-      if (status === "confirmed") {
-        // Khóa bàn -> Chuyển sang trạng thái Đã đặt trước
+      // 1. Lấy trạng thái hiện tại thực tế của Bàn đó dưới DB
+      const { data: currentTable } = await supabase
+        .from("tables")
+        .select("status")
+        .eq("id", finalTableId)
+        .single();
+
+      if (status === "seated") {
+        // Khách nhận bàn -> Bàn chuyển sang đang có khách (Occupied)
         await supabase
           .from("tables")
-          .update({ status: "reserved" })
-          .eq("id", finalTableId);
-      } else if (status === "seated") {
-        // Khách ngồi ăn -> Chuyển sang Có khách sử dụng
-        await supabase
-          .from("tables")
-          .update({ status: "occupied" })
+          .update({ status: "occupied", reservation_conflict: false })
           .eq("id", finalTableId);
       } else if (status === "cancelled" || status === "no_show") {
-        // Hủy lịch hoặc Quá hạn không đến -> Giải phóng bàn ngay lập tức về bàn trống
-        await supabase
-          .from("tables")
-          .update({ status: "available" })
-          .eq("id", finalTableId);
+        // Nếu hủy/quá hạn: CHỈ nhả bàn về Trống (Available) NẾU bàn đó ĐANG BỊ KHÓA (Reserved)
+        // NẾU đang có khách khác ăn (Occupied) thì tuyệt đối không đụng vào!
+        if (currentTable && currentTable.status === "reserved") {
+          await supabase
+            .from("tables")
+            .update({ status: "available", reservation_conflict: false })
+            .eq("id", finalTableId);
+        }
       }
+      // Lưu ý: Không cần bắt status === 'confirmed' ở đây nữa vì hàm quét 90 phút (autoLock) sẽ lo việc khóa bàn
     }
 
     return NextResponse.json(
       {
         success: true,
-        message: "Cập nhật tiến độ điều phối lịch đặt bàn thành công",
+        message: "Cập nhật thành công",
         reservation: updatedRes,
       },
       { status: 200 },
@@ -107,7 +104,7 @@ export async function PATCH(request: Request, context: any) {
   } catch (catchError: any) {
     console.error("Lỗi hệ thống điều phối đặt bàn:", catchError);
     return NextResponse.json(
-      { error: catchError.message || "Lỗi hệ thống nội bộ" },
+      { error: catchError.message || "Lỗi nội bộ" },
       { status: 500 },
     );
   }

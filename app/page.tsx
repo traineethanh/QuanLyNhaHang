@@ -9,9 +9,7 @@ import Image from "next/image";
 const navLinks = [
   { label: "Trang chủ", href: "#" },
   { label: "Giới thiệu", href: "#about" },
-  { label: "Thực đơn", href: "#menu" },
   { label: "Hình ảnh", href: "#gallery" },
-  { label: "Tin tức", href: "#news" },
   { label: "Liên hệ", href: "#contact" },
 ];
 
@@ -194,114 +192,6 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Menu Section */}
-      <section id="menu" className="bg-slate-50 px-6 py-16 sm:px-10 lg:px-16">
-        <div className="mx-auto max-w-6xl">
-          <div className="text-center">
-            <p className="text-sm uppercase tracking-[0.35em] text-amber-700">
-              Thực đơn
-            </p>
-            <h2 className="mt-4 text-4xl font-semibold text-slate-900 sm:text-5xl">
-              THỰC ĐƠN
-            </h2>
-            <p className="mt-4 max-w-2xl mx-auto text-base leading-8 text-slate-600">
-              Khám phá vài món ăn đặc sắc đang phục vụ tại nhà hàng. Quét mã QR
-              tại bàn để xem thực đơn đầy đủ và đặt món nhanh chóng.
-            </p>
-          </div>
-
-          <div className="mt-12 grid gap-8 lg:grid-cols-[0.95fr_0.7fr] lg:items-start">
-            {/* Danh sách món ăn lấy từ database */}
-            <div className="grid gap-4">
-              {[
-                {
-                  name: "Gỏi cuốn tôm thịt",
-                  description: "2 cuốn tôm và thịt heo, chấm nước mắm pha.",
-                  price: "45.000đ",
-                },
-                {
-                  name: "Chả giò chiên",
-                  description: "Chả giò giòn rụm, ăn kèm rau sống.",
-                  price: "55.000đ",
-                },
-                {
-                  name: "Cơm chiên hải sản",
-                  description: "Cơm chiên với tôm, mực và rau củ.",
-                  price: "85.000đ",
-                },
-                {
-                  name: "Bò lúc lắc",
-                  description: "Thịt bò Úc xào rau củ, sốt tiêu đen đặc biệt.",
-                  price: "150.000đ",
-                },
-                {
-                  name: "Lẩu thái hải sản",
-                  description: "Lẩu chua cay đậm đà với hải sản tươi.",
-                  price: "350.000đ",
-                },
-              ].map((item) => (
-                <div
-                  key={item.name}
-                  className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm"
-                >
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <h3 className="text-xl font-semibold text-slate-900">
-                        {item.name}
-                      </h3>
-                      <p className="mt-2 text-sm leading-6 text-slate-600">
-                        {item.description}
-                      </p>
-                    </div>
-                    <span className="rounded-full bg-amber-100 px-4 py-2 text-sm font-semibold text-amber-700">
-                      {item.price}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Card minh họa điện thoại quét QR */}
-            <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="flex items-center justify-between rounded-3xl bg-slate-100 p-4">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.25em] text-slate-500">
-                    Minh họa
-                  </p>
-                  <p className="mt-2 text-lg font-semibold text-slate-900">
-                    Quét QR trên bàn
-                  </p>
-                </div>
-                <div className="rounded-2xl bg-amber-100 p-3 text-amber-600">
-                  <QrCode className="h-6 w-6" />
-                </div>
-              </div>
-              <div className="mt-6 rounded-[1.75rem] border border-slate-200 bg-white p-6">
-                <div className="mb-6 flex items-center justify-between">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.25em] text-slate-500">
-                      Menu QR
-                    </p>
-                    <p className="mt-1 text-sm text-slate-600">
-                      Mở thực đơn kỹ thuật số trên điện thoại
-                    </p>
-                  </div>
-                  <div className="rounded-2xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
-                    Tiện lợi
-                  </div>
-                </div>
-                <div className="grid gap-3 rounded-3xl bg-slate-100 p-5 text-center">
-                  <div className="mx-auto h-36 w-36 rounded-3xl bg-slate-200" />
-                  <p className="text-sm text-slate-500">
-                    Mã QR tại bàn, quét để mở thực đơn
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
       {/* Gallery Section */}
       <section id="gallery" className="bg-white px-6 py-16 sm:px-10 lg:px-16">
         <div className="mx-auto max-w-6xl">
@@ -314,61 +204,23 @@ export default function HomePage() {
             </h2>
           </div>
           <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {["/gallery-1.jpg", "/gallery-2.jpg", "/gallery-3.jpg"].map((src, index) => (
-              <div
-                key={index}
-                className="overflow-hidden rounded-[1.75rem] border border-slate-200 bg-slate-100 p-0 shadow-sm"
-              >
-                <div className="relative h-72">
-                <Image
-                  src={src}
-                  alt={`Hình ảnh nhà hàng ${index + 1}`}
-                  fill
-                  className="object-cover"
-                />
-              </div>
-            </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* News Section */}
-      <section id="news" className="bg-slate-50 px-6 py-16 sm:px-10 lg:px-16">
-        <div className="mx-auto max-w-6xl">
-          <div className="text-center">
-            <p className="text-sm uppercase tracking-[0.35em] text-amber-700">
-              Tin tức
-            </p>
-            <h2 className="mt-4 text-4xl font-semibold text-slate-900 sm:text-5xl">
-              Cập nhật sự kiện và khuyến mãi
-            </h2>
-          </div>
-          <div className="mt-12 grid gap-6 lg:grid-cols-2">
-            <article className="rounded-[2rem] border border-slate-200 bg-white p-8 shadow-sm">
-              <p className="text-xs uppercase tracking-[0.25em] text-rose-700">
-                Ưu đãi
-              </p>
-              <h3 className="mt-4 text-2xl font-semibold text-slate-900">
-                Khuyến mãi cuối tuần
-              </h3>
-              <p className="mt-3 text-sm leading-7 text-slate-600">
-                Giảm 20% cho set cơm gia đình và đồ uống miễn phí dành cho nhóm
-                4 khách trở lên trong thứ 6 và thứ 7.
-              </p>
-            </article>
-            <article className="rounded-[2rem] border border-slate-200 bg-white p-8 shadow-sm">
-              <p className="text-xs uppercase tracking-[0.25em] text-rose-700">
-                Sự kiện
-              </p>
-              <h3 className="mt-4 text-2xl font-semibold text-slate-900">
-                Món mới ra mắt
-              </h3>
-              <p className="mt-3 text-sm leading-7 text-slate-600">
-                Thưởng thức menu mới với các món hải sản tươi sống và tráng
-                miệng mùa hè được chế biến đặc biệt bởi đầu bếp của chúng tôi.
-              </p>
-            </article>
+            {["/gallery-1.jpg", "/gallery-2.jpg", "/gallery-3.jpg"].map(
+              (src, index) => (
+                <div
+                  key={index}
+                  className="overflow-hidden rounded-[1.75rem] border border-slate-200 bg-slate-100 p-0 shadow-sm"
+                >
+                  <div className="relative h-72">
+                    <Image
+                      src={src}
+                      alt={`Hình ảnh nhà hàng ${index + 1}`}
+                      fill
+                      className="object-cover"
+                    />
+                  </div>
+                </div>
+              ),
+            )}
           </div>
         </div>
       </section>

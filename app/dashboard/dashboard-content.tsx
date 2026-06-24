@@ -21,6 +21,8 @@ interface DashboardContentProps {
   stats: {
     todayRevenue: number;
     todayOrders: number;
+    revenueTrend: number; // 🔥 ĐÃ THÊM MỚI
+    ordersTrend: number; // 🔥 ĐÃ THÊM MỚI
     activeOrders: number;
     occupiedTables: number;
     totalTables: number;
@@ -92,7 +94,11 @@ export function DashboardContent({
           title="Doanh thu hôm nay"
           value={formatCurrency(stats.todayRevenue)}
           icon={DollarSign}
-          trend={{ value: 12.5, isPositive: true }}
+          // 🔥 ĐÃ SỬA: Lấy giá trị tuyệt đối Math.abs và kiểm tra nếu >= 0 thì là tăng trưởng dương
+          trend={{
+            value: Math.abs(stats.revenueTrend),
+            isPositive: stats.revenueTrend >= 0,
+          }}
           description="so với hôm qua"
           iconClassName="bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400"
         />
@@ -100,7 +106,11 @@ export function DashboardContent({
           title="Đơn hàng hôm nay"
           value={stats.todayOrders}
           icon={ShoppingCart}
-          trend={{ value: 8, isPositive: true }}
+          // 🔥 ĐÃ SỬA: Tự động đổi màu xanh (tăng) / màu đỏ (giảm) tùy theo giá trị ordersTrend
+          trend={{
+            value: Math.abs(stats.ordersTrend),
+            isPositive: stats.ordersTrend >= 0,
+          }}
           description="so với hôm qua"
           iconClassName="bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400"
         />
@@ -123,7 +133,7 @@ export function DashboardContent({
       {/* Khu vực sơ đồ trạng thái bàn real-time */}
       <TableOverview tables={tables} areas={areas} />
 
-      {/* Khu vực phân tích dữ liệu: Biểu đồ xu hướng doanh thu ngắn hạn và Tỷ trọng món ăn bán chạy */}
+      {/* Khu vực phân tích dữ liệu */}
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <RevenueChart data={revenueData} />
@@ -133,7 +143,7 @@ export function DashboardContent({
         </div>
       </div>
 
-      {/* Nhật ký hoạt động: Danh sách 5 hóa đơn vừa thanh toán hoàn tất gần đây */}
+      {/* Nhật ký hoạt động */}
       <div className="rounded-3xl border border-slate-200 bg-white p-2 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="p-4 pb-2">
           <h3 className="text-base font-bold tracking-tight text-slate-900 dark:text-white">

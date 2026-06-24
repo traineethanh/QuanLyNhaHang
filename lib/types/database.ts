@@ -46,11 +46,12 @@ export interface AttendanceLog {
   employee_id: string; // uuid (ref: profiles.id)
   shift_id: string; // uuid (ref: shifts.id)
   attendance_date: string; // date (YYYY-MM-DD)
-  status: AttendanceStatus; // Đã cập nhật dùng custom type
+  status: AttendanceStatus;
   late_minutes: number; // integer
   note: string | null;
   approved_by: string | null; // uuid (ref: profiles.id)
   is_locked: boolean;
+  payment_status: "unpaid" | "paid"; // QUẢN LÝ QUYẾT TOÁN LƯƠNG
   created_at: string; // timestamp with time zone
   updated_at: string; // timestamp with time zone
 }

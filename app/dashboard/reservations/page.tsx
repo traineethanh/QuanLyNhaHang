@@ -17,10 +17,7 @@ async function getReservationsData() {
       .select("*, table:tables(*, area:areas(*))") // Lấy thông tin khu vực của bàn trong lịch hẹn
       .order("reservation_time", { ascending: true }),
 
-    supabase
-      .from("tables")
-      .select("*, area:areas(*)") // 🔥 SỬA CHỖ NÀY: Lấy kèm thông tin tầng/khu vực của tất cả các bàn
-      .eq("is_active", true),
+    supabase.from("tables").select("*, area:areas(*)").eq("is_active", true),
   ]);
 
   return {

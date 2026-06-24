@@ -51,6 +51,7 @@ interface InventoryBatch {
   received_at: string | null;
   current_quantity: number;
   expiry_date: string | null;
+  warehouse_id?: string | null;
 }
 
 interface Ingredient {
@@ -61,7 +62,6 @@ interface Ingredient {
   min_stock_level: number | null;
   category_id: string | null;
   ingredient_categories: { name: string } | null;
-  // Dữ liệu mở rộng phục vụ hiển thị tồn kho đa kho và quản lý lô hàng
   total_inventory?: number;
   warehouse_id?: string | null;
   inventory_batches?: InventoryBatch[];
@@ -70,7 +70,7 @@ interface Ingredient {
 export function IngredientsContent({
   initialCategories,
   initialIngredients,
-  warehouses = [], // Nhận danh sách kho từ Server Component truyền xuống
+  warehouses = [],
 }: {
   initialCategories: Category[];
   initialIngredients: Ingredient[];
@@ -90,20 +90,19 @@ export function IngredientsContent({
   }, [initialCategories]);
 
   const [selectedCatId, setSelectedCatId] = useState<string>("all");
-
-  // Bộ lọc thông minh hàng đầu
   const [searchQuery, setSearchQuery] = useState("");
   const [stockStatusFilter, setStockStatusFilter] = useState<
     "all" | "safe" | "low"
   >("all");
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>("all");
-
-  // State kiểm soát dòng mở rộng hiển thị Lô hàng (Lưu danh sách ID nguyên liệu đang mở)
   const [expandedIngIds, setExpandedIngIds] = useState<Record<string, boolean>>(
     {},
   );
 
-  // State điều khiển các khung Dialog tạo mới dữ liệu nền
+  // ==================== 🛠️ STATE ĐIỀU KHIỂN SỬA ĐỔI SỐ LƯỢNG THEO TỪNG LÔ ====================
+  const [editingBatchId, setEditingBatchId] = useState<string | null>(null); // ID của lô đang được chọn sửa trực tiếp
+  const [editBatchQtyValue, setEditBatchQtyValue] = useState<string>(""); // Giá trị số lượng tạm thời khi gõ phím trên lô
+
   const [newCatName, setNewCatName] = useState("");
   const [isCatOpen, setIsCatOpen] = useState(false);
   const [isIngOpen, setIsIngOpen] = useState(false);
@@ -113,10 +112,9 @@ export function IngredientsContent({
     base_uom: "",
     min_stock_level: "0",
     category_id: "",
-    warehouse_id: "", // Bổ sung kho lưu trữ ban đầu khi khởi tạo vật tư
+    warehouse_id: "",
   });
 
-  // State điều khiển chức năng Quy đổi đơn vị tính (UoM)
   const [isUomOpen, setIsUomOpen] = useState(false);
   const [activeIng, setActiveIng] = useState<Ingredient | null>(null);
   const [uomForm, setUomForm] = useState({
@@ -124,7 +122,6 @@ export function IngredientsContent({
     conversion_factor: "",
   });
 
-  // Hàm đảo ngược trạng thái đóng/mở xem lô hàng của một vật tư
   const toggleExpandIngredient = (id: string) => {
     setExpandedIngIds((prev) => ({
       ...prev,
@@ -132,21 +129,74 @@ export function IngredientsContent({
     }));
   };
 
-  // Hàm format số lượng thông minh tự động quy đổi gram sang kg và đồng nhất nhãn hiển thị
   const formatQuantity = (amount: number, unit: string) => {
     const lowerUnit = unit.toLowerCase().trim();
-
-    // Nếu đơn vị lưu kho gốc là gram (g hoặc gram)
     if (lowerUnit === "g" || lowerUnit === "gram") {
-      // Tự động chuyển đổi sang kg nếu lượng định biên lớn hoặc khi lượng tồn bằng 0 để đồng nhất cột
       const kgValue = amount / 1000;
       return `${Number(kgValue.toFixed(2))} kg`;
     }
-
     return `${amount} ${unit}`;
   };
 
-  // Hành động: Thêm nhanh nhóm nguyên liệu mới
+  // ==================== 🚀 HÀM GỬI CẬP NHẬT SỐ LƯỢNG LÔ LÊN BACKEND VIA API PATCH ====================
+  const handleUpdateBatchQuantitySubmit = async (
+    batchId: string,
+    ingredientId: string,
+    originalQty: number,
+  ) => {
+    const parsedQty = Number(editBatchQtyValue);
+
+    // Kiểm tra tính hợp lệ đầu vào
+    if (isNaN(parsedQty) || parsedQty < 0) {
+      alert("Vui lòng nhập số lượng hợp lệ lớn hơn hoặc bằng 0!");
+      setEditingBatchId(null);
+      return;
+    }
+
+    // Nếu không thay đổi gì về số lượng thì chỉ cần đóng ô nhập dữ liệu lại
+    if (parsedQty === originalQty) {
+      setEditingBatchId(null);
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/ingredients", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          batch_id: batchId,
+          ingredient_id: ingredientId,
+          new_quantity: parsedQty,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.success) {
+        // Cập nhật lại state Client tại chỗ giúp giao diện mượt mà lập tức
+        setIngredients((prev) =>
+          prev.map((ing) => {
+            if (ing.id !== ingredientId) return ing;
+            return {
+              ...ing,
+              total_inventory: result.data.total_inventory,
+              inventory_batches: result.data.inventory_batches,
+            };
+          }),
+        );
+        setEditingBatchId(null); // Tắt trạng thái sửa đổi lô hàng
+        router.refresh(); // Làm mới ngầm Server Component để đồng bộ hóa
+      } else {
+        alert(`Lỗi: ${result.error || "Không thể cập nhật số lượng lô."}`);
+        setEditingBatchId(null);
+      }
+    } catch (err) {
+      console.error("Lỗi kết nối API cập nhật lô hàng:", err);
+      alert("Không thể kết nối đến máy chủ API.");
+      setEditingBatchId(null);
+    }
+  };
+
   const handleAddCategory = async () => {
     if (!newCatName.trim()) return;
     const { createClient } = await import("@/lib/supabase/client");
@@ -166,7 +216,6 @@ export function IngredientsContent({
     }
   };
 
-  // Hành động: Thêm nguyên liệu gốc mới (Tích hợp thêm trường warehouse_id)
   const handleAddIngredient = async () => {
     if (!newIng.name.trim() || !newIng.base_uom.trim() || !newIng.category_id)
       return;
@@ -200,7 +249,7 @@ export function IngredientsContent({
           min_stock_level: result.data.min_stock_level,
           category_id: result.data.category_id,
           warehouse_id: result.data.warehouse_id,
-          total_inventory: 0, // Mặc định hàng mới tạo kho rỗng
+          total_inventory: 0,
           inventory_batches: [],
           ingredient_categories: selectedCategory
             ? { name: selectedCategory.name }
@@ -227,7 +276,6 @@ export function IngredientsContent({
     }
   };
 
-  // Hành động: Ghi nhận Quy đổi đơn vị tính (UoM) vào database
   const handleSaveUomConversion = async () => {
     if (
       !activeIng ||
@@ -260,16 +308,13 @@ export function IngredientsContent({
     }
   };
 
-  // Engine xử lý bộ lọc thông minh kết hợp đa điều kiện bằng useMemo
   const filteredIngredients = useMemo(() => {
     return ingredients
       .map((ing) => {
-        // Nếu chọn "Tất cả kho", giữ nguyên tổng tồn kho hệ thống và mảng lô hàng gốc
         if (selectedWarehouseId === "all") {
           return ing;
         }
 
-        // Nếu chọn một kho cụ thể: Bóc tách lại lô và tổng lượng tồn của riêng kho đó
         const rawBatches = ing.inventory_batches || [];
         const filteredBatches = rawBatches.filter(
           (b: any) => b.warehouse_id === selectedWarehouseId,
@@ -287,19 +332,16 @@ export function IngredientsContent({
         };
       })
       .filter((ing) => {
-        // 1. Kiểm tra bộ lọc Phân nhóm vật tư ở cột trái
         if (selectedCatId !== "all" && ing.category_id !== selectedCatId) {
           return false;
         }
 
-        // 2. Kiểm tra bộ lọc tìm kiếm văn bản (Không phân biệt hoa thường)
         const matchesSearch =
           ing.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
           (ing.code &&
             ing.code.toLowerCase().includes(searchQuery.toLowerCase()));
         if (!matchesSearch) return false;
 
-        // 3. Kiểm tra bộ lọc trạng thái tồn kho (Cảnh báo thông minh theo hạn mức)
         const currentStock = ing.total_inventory || 0;
         const minStock = ing.min_stock_level || 0;
         const isLowStock = currentStock <= minStock;
@@ -505,7 +547,7 @@ export function IngredientsContent({
           </Dialog>
         </div>
 
-        {/* Cụm bộ lọc thông minh hàng đầu mới bổ sung */}
+        {/* Cụm bộ lọc thông minh hàng đầu */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-muted/40 p-3 rounded-xl border">
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -582,14 +624,12 @@ export function IngredientsContent({
                     const currentStock = ing.total_inventory || 0;
                     const minStock = ing.min_stock_level || 0;
 
-                    // 🧠 LOGIC TOÁN HỌC MỚI: Đảo ngược màu sắc báo động chuẩn kế toán kho
-                    const isOutOfStock = currentStock === 0; // Hết sạch hàng
+                    const isOutOfStock = currentStock === 0;
                     const isLowStock =
-                      currentStock > 0 && currentStock <= minStock; // Dưới mức định biên
+                      currentStock > 0 && currentStock <= minStock;
 
                     const isExpanded = !!expandedIngIds[ing.id];
 
-                    // Tính tỷ lệ phần trăm tiến độ tồn kho so với hạn mức tối thiểu phục vụ Progress Bar
                     const progressPercentage =
                       minStock > 0
                         ? Math.min(100, (currentStock / minStock) * 100)
@@ -600,10 +640,10 @@ export function IngredientsContent({
                         <tr
                           className={`transition-colors border-b ${
                             isOutOfStock
-                              ? "bg-rose-50/50 dark:bg-rose-950/10 hover:bg-rose-100/50 text-rose-900 dark:text-rose-200" // Hết hàng -> Màu đỏ chót đi mua gấp
+                              ? "bg-rose-50/50 dark:bg-rose-950/10 hover:bg-rose-100/50 text-rose-900 dark:text-rose-200"
                               : isLowStock
-                                ? "bg-amber-50/60 dark:bg-amber-950/20 hover:bg-amber-100/60 text-amber-900 dark:text-amber-200" // Sắp hết -> Màu vàng hổ phách lên đơn nhập
-                                : "hover:bg-muted/40" // Đầy kho an toàn -> Màu trắng sạch sẽ tinh tế
+                                ? "bg-amber-50/60 dark:bg-amber-950/20 hover:bg-amber-100/60 text-amber-900 dark:text-amber-200"
+                                : "hover:bg-muted/40"
                           }`}
                         >
                           <td className="px-4 py-3.5 text-center">
@@ -631,7 +671,6 @@ export function IngredientsContent({
                               <Package className="h-4 w-4 shrink-0 text-muted-foreground" />
                               <span>{ing.name}</span>
 
-                              {/* ➔ UX THỰC CHIẾN: Phân tách rõ rệt 2 cấp độ cảnh báo của nhà hàng */}
                               {isOutOfStock ? (
                                 <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-[10px] font-black bg-rose-600 text-white animate-pulse">
                                   ⚠️ HẾT HÀNG
@@ -648,18 +687,19 @@ export function IngredientsContent({
                               {ing.ingredient_categories?.name || "Mặc định"}
                             </span>
                           </td>
-                          {/* Cột số lượng tồn kho thực tế */}
+
+                          {/* SỐ LƯỢNG TỒN TỔNG CỦA CÁC LÔ (Giữ nguyên text hiển thị gốc theo yêu cầu) */}
                           <td
                             className={`px-4 py-3.5 text-right font-black text-sm ${isOutOfStock ? "text-rose-600" : isLowStock ? "text-amber-600" : "text-primary"}`}
                           >
                             {formatQuantity(currentStock, ing.base_uom)}
                           </td>
+
                           <td className="px-4 py-3.5 text-right font-medium text-muted-foreground">
                             <div className="flex flex-col items-end gap-1">
                               <span>
                                 {formatQuantity(minStock, ing.base_uom)}
                               </span>
-                              {/* ➔ UI CẢI TIẾN: Bổ sung thanh Progress Bar trực quan lướt nhanh 5 giây */}
                               <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden border">
                                 <div
                                   className={`h-full transition-all ${isOutOfStock ? "w-0" : isLowStock ? "bg-amber-500" : "bg-emerald-500"}`}
@@ -669,7 +709,6 @@ export function IngredientsContent({
                             </div>
                           </td>
                           <td className="px-4 py-3.5 text-center">
-                            {/* ➔ UX THỰC CHIẾN: Đổi tên nút từ "Cấu hình" mang tính IT sang chữ "Cập nhật" chuyên ngành kho */}
                             <Button
                               size="sm"
                               variant="outline"
@@ -698,10 +737,11 @@ export function IngredientsContent({
                                   Chi tiết các lô hàng khả dụng
                                 </div>
 
-                                {/* ➔ UX THỰC CHIẾN: Chỉ lọc ra các lô hàng còn số lượng thực tế (> 0), ẩn biến mất các lô rác rỗng */}
                                 {!ing.inventory_batches ||
                                 ing.inventory_batches.filter(
-                                  (b) => Number(b.current_quantity) > 0,
+                                  (b) =>
+                                    Number(b.current_quantity) > 0 ||
+                                    b.id === editingBatchId,
                                 ).length === 0 ? (
                                   <p className="text-xs text-muted-foreground pl-5 py-2 italic">
                                     Hiện không có lô hàng nào còn hàng khả dụng
@@ -712,8 +752,9 @@ export function IngredientsContent({
                                     {ing.inventory_batches
                                       .filter(
                                         (batch) =>
-                                          Number(batch.current_quantity) > 0,
-                                      ) // Lọc sạch lô rác
+                                          Number(batch.current_quantity) > 0 ||
+                                          batch.id === editingBatchId,
+                                      )
                                       .map((batch) => {
                                         const isExpired = batch.expiry_date
                                           ? new Date(batch.expiry_date) <
@@ -734,17 +775,66 @@ export function IngredientsContent({
                                                 </span>
                                               )}
                                             </div>
-                                            <div className="flex justify-between">
+
+                                            {/* ==================== 🔥 Ô THAY ĐỔI SỐ LƯỢNG TRÊN TỪNG LÔ HÀNG RIÊNG BIỆT ==================== */}
+                                            <div className="flex justify-between items-center h-7">
                                               <span className="text-muted-foreground">
                                                 Số lượng tồn:
                                               </span>
-                                              <span className="font-black text-foreground">
-                                                {formatQuantity(
-                                                  batch.current_quantity,
-                                                  ing.base_uom,
-                                                )}
-                                              </span>
+
+                                              {editingBatchId === batch.id ? (
+                                                <Input
+                                                  type="number"
+                                                  // Thiết kế ô nhập số nhỏ gọn, bo góc khít với thẻ Lô hàng, tự động focus
+                                                  className="w-20 h-6 text-right font-black p-1 text-xs border-primary bg-background focus-visible:ring-1"
+                                                  value={editBatchQtyValue}
+                                                  onChange={(e) =>
+                                                    setEditBatchQtyValue(
+                                                      e.target.value,
+                                                    )
+                                                  }
+                                                  onBlur={() =>
+                                                    handleUpdateBatchQuantitySubmit(
+                                                      batch.id,
+                                                      ing.id,
+                                                      batch.current_quantity,
+                                                    )
+                                                  }
+                                                  onKeyDown={(e) => {
+                                                    if (e.key === "Enter") {
+                                                      handleUpdateBatchQuantitySubmit(
+                                                        batch.id,
+                                                        ing.id,
+                                                        batch.current_quantity,
+                                                      );
+                                                    } else if (
+                                                      e.key === "Escape"
+                                                    ) {
+                                                      setEditingBatchId(null);
+                                                    }
+                                                  }}
+                                                  autoFocus
+                                                />
+                                              ) : (
+                                                <span
+                                                  className="font-black text-foreground cursor-pointer hover:bg-accent hover:text-primary px-1.5 py-0.5 rounded transition-all select-none border border-transparent hover:border-muted-foreground/30"
+                                                  title="Kích chuột để sửa nhanh số lượng của riêng lô này"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setEditingBatchId(batch.id);
+                                                    setEditBatchQtyValue(
+                                                      batch.current_quantity.toString(),
+                                                    );
+                                                  }}
+                                                >
+                                                  {formatQuantity(
+                                                    batch.current_quantity,
+                                                    ing.base_uom,
+                                                  )}
+                                                </span>
+                                              )}
                                             </div>
+
                                             <div className="flex justify-between items-center">
                                               <span className="text-muted-foreground flex items-center gap-1">
                                                 <Calendar className="h-3 w-3" />{" "}

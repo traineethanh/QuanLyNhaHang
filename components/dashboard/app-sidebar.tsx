@@ -61,7 +61,7 @@ const ALLOWED_ROUTES: Record<UserRole, string[]> = {
     "/dashboard/reservations",
   ],
   waiter: ["/dashboard", "/dashboard/tables", "/dashboard/pos"],
-  kitchen: ["/dashboard/kitchen"],
+  kitchen: ["/dashboard/kitchen", "/dashboard/menu/recipes", "/dashboard/menu"],
 };
 
 // 🏷️ Bản dịch hiển thị vai trò tiếng Việt thân thiện ra UI Footer

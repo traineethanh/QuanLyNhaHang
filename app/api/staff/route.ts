@@ -27,7 +27,7 @@ export async function POST(request: Request) {
       await supabaseAdmin.auth.admin.createUser({
         email: String(email).trim(),
         password: String(password),
-        email_confirm: true, // Tự động xác thực email để nhân viên đăng nhập được ngay
+        email_confirm: true, // Tự động xác thực email để nhân viên đăng nhập được ngay mà không cần check hòm thư
       });
 
     if (authError) {
